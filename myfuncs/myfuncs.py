@@ -102,7 +102,9 @@ def validate_data(df, show_counts=True):
         print(f'#########################################################################################################################################################################################\nDataFrame: {df_name}')
         
         # Snapshot the dataset
+        pd.set_option('display.max_columns',None)
         display(df)
+        pd.reset_option('display.max_columns')
         
         # Check for unique values
         unique_counts = pd.DataFrame(df.nunique())
