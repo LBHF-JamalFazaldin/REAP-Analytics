@@ -311,27 +311,100 @@ def query_data(schema, data):
         print(f'Error querying data: {e}')
         return pd.DataFrame()
 
+def capture_header_format(file_path, sheet_name):
+    """
+    Capture header cell formatting and column widths from an Excel sheet.
+ 
+    Args:
+        file_path (str): Path to the Excel file.
+        sheet_name (str): Name of the sheet to inspect.
+ 
+    Returns:
+        tuple: (header_styles, col_widths) dictionaries
+    """
+    header_styles, col_widths = {}, {}
+ 
+    try:
+        wb = load_workbook(file_path)
+        if sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+ 
+            # Capture header styles (one cell per column in row 1)
+            for cell in ws[1]:
+                header_styles[cell.column_letter] = {
+                    "font": cell.font.copy(),
+                    "fill": cell.fill.copy(),
+                    "alignment": cell.alignment.copy(),
+                    "border": cell.border.copy(),
+                    "number_format": cell.number_format,
+                }
+ 
+            # Capture column widths
+            for col in ws.iter_cols(1, ws.max_column):
+                col_letter = col[0].column_letter
+                col_widths[col_letter] = ws.column_dimensions[col_letter].width
+ 
+    except Exception as e:
+        print(f"Could not capture formatting: {e}")
+ 
+    return header_styles, col_widths
+
+def apply_header_format(file_path, sheet_name, header_styles, col_widths):
+    """
+    Apply saved header formatting and column widths to a sheet.
+ 
+    Args:
+        file_path (str): Path to the Excel file.
+        sheet_name (str): Name of the sheet to format.
+        header_styles (dict): Dictionary of cell styles per column letter.
+        col_widths (dict): Dictionary of column widths per column letter.
+    """
+    if not header_styles and not col_widths:
+        return  # Nothing to apply
+ 
+    wb = load_workbook(file_path)
+    if sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+ 
+        # Restore header formatting
+        for cell in ws[1]:
+            if cell.column_letter in header_styles:
+                style = header_styles[cell.column_letter]
+                cell.font = style["font"]
+                cell.fill = style["fill"]
+                cell.alignment = style["alignment"]
+                cell.border = style["border"]
+                cell.number_format = style["number_format"]
+ 
+        # Restore column widths
+        for col_letter, width in col_widths.items():
+            if width is not None:
+                ws.column_dimensions[col_letter].width = float(width)
+ 
+    wb.save(file_path)
+
 def export_file(df, file_type='csv', sheet_name='Sheet1', **kwargs):
     """
-    Exports a DataFrame to CSV or XLSX while preserving Excel formatting if XLSX exists.
+    Exports a DataFrame to CSV or XLSX while preserving Excel header formatting if XLSX exists.
  
     Args:
         df (pd.DataFrame): The DataFrame to export.
+        file_type (str): 'csv' or 'xlsx' (default: 'csv')
+        sheet_name (str): Sheet name for Excel export (default: 'Sheet1')
         **kwargs:
             - directory (str): Target directory path.
             - df_name (str): Optional name for the DataFrame file.
-            - file_type (str): 'csv' or 'xlsx' (default: 'csv')
     """
     try:
         directory = kwargs.get(
             'directory',
             r"C:\Users\jf79\OneDrive - Office Shared Service\Documents\H&F Analysis\Python CSV Repositry"
         )
-        df_name = kwargs.get('df_name', get_var_name(df))
+        df_name = kwargs.get('df_name', "exported_dataframe")
         file_type = file_type.lower()
  
         # Prompt for name if not found
-        if not isinstance(df_name, str) or df_name == '_':
+        if not isinstance(df_name, str) or df_name.strip() == '_':
             df_name = input('DataFrame not found in global variables. Please enter a file name: ')
  
         # Ensure directory exists
@@ -342,17 +415,21 @@ def export_file(df, file_type='csv', sheet_name='Sheet1', **kwargs):
  
         if file_type == 'csv':
             df.to_csv(file_path, index=False)
+ 
         elif file_type == 'xlsx':
+            # Step 1: Capture formatting if file exists
+            header_styles, col_widths = {}, {}
             if os.path.exists(file_path):
-                # Load existing workbook to preserve formatting
-                book = load_workbook(file_path)
-                with pd.ExcelWriter(file_path, engine='openpyxl', mode='a') as writer:
-                    writer.book = book
-                    writer.sheets = {ws.title: ws for ws in book.worksheets}
-                    df.to_excel(writer, index=False, sheet_name=sheet_name, startrow=0, header=True)
-            else:
-                # If file does not exist, create normally
-                df.to_excel(file_path, index=False)
+                header_styles, col_widths = capture_header_format(file_path, sheet_name)
+ 
+            # Step 2: Write DataFrame
+            mode = "a" if os.path.exists(file_path) else "w"
+            with pd.ExcelWriter(file_path, engine="openpyxl", mode=mode, if_sheet_exists="overlay") as writer:
+                df.to_excel(writer, index=False, sheet_name=sheet_name, startrow=0)
+ 
+            # Step 3: Reapply formatting
+            apply_header_format(file_path, sheet_name, header_styles, col_widths)
+ 
         else:
             raise ValueError(f"Unsupported file_type '{file_type}'. Use 'csv' or 'xlsx'.")
  
@@ -360,3 +437,30 @@ def export_file(df, file_type='csv', sheet_name='Sheet1', **kwargs):
  
     except Exception as e:
         print(f'Error exporting to {file_type.upper()}: {e}')
+
+def id_check(df, id, keep=False, **kwargs):
+    id_check = pd.DataFrame(df[id])
+
+    directory = kwargs.get(
+        'directory',
+        r"C:\Users\jf79\OneDrive - Office Shared Service\Documents\H&F Analysis\Python CSV Repositry"
+    )
+
+    export_file(
+        id_check,
+        directory=directory,
+        df_name='id_check',
+        file_type='csv'
+    )
+
+    id_check = pd.read_csv('id_check.csv')
+
+    id_check = id_check[id_check[id].duplicated(keep=keep)].sort_values(by=id)
+    id_check['count'] = 1
+
+    merge = pd.merge(
+        df, id_check,
+        how='left', on=id 
+    ).dropna(subset=['count'], axis=0).drop(columns='count')
+
+    return merge
